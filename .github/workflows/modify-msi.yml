@@ -1,0 +1,30 @@
+name: Modify Friend MSI for Your Hub
+
+on: workflow_dispatch
+
+jobs:
+  modify-msi:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Extract Friend's MSI
+        run: |
+          7z x "friend-msi.msi" -o"extracted"
+          
+      - name: Modify config.json
+        run: |
+          $configPath = "extracted\ProgramFilesFolder\PENG RMM Agent\config.json"
+          $config = Get-Content $configPath | ConvertFrom-Json
+          $config.hubUrl = "https://watson-parts.com/agenthub"
+          $config | ConvertTo-Json | Set-Content $configPath
+          
+      - name: Repackage MSI
+        run: |
+          7z a modified.msi "extracted\*"
+          
+      - name: Upload Modified MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: modified-msi
+          path: modified.msi
