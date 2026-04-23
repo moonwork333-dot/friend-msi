@@ -41,8 +41,15 @@ jobs:
             exit 1
           }
           
-          Write-Host "Extraction complete. Contents:"
-          Get-ChildItem -Recurse $extractPath | Select-Object FullName
+          Write-Host "Extraction complete. Full directory structure:"
+          Get-ChildItem -Recurse $extractPath | ForEach-Object {
+            Write-Host "  $($_.FullName)"
+          }
+          
+          Write-Host "Searching for all JSON files:"
+          Get-ChildItem -Path $extractPath -Filter "*.json" -Recurse | ForEach-Object {
+            Write-Host "  Found: $($_.FullName)"
+          }
 
       - name: Find and Modify config.json
         shell: powershell
@@ -50,33 +57,45 @@ jobs:
           $extractPath = "C:\msi_extracted"
           $hubUrl = "${{ github.event.inputs.hub_url }}"
           
+          Write-Host "Looking for config.json in: $extractPath"
+          
           # Search for config.json in extracted MSI
           $configFiles = Get-ChildItem -Path $extractPath -Filter "config.json" -Recurse
           
           if ($configFiles.Count -eq 0) {
+            Write-Host "ERROR: config.json not found in MSI"
+            Write-Host "Listing all files in extracted MSI:"
+            Get-ChildItem -Path $extractPath -Recurse | ForEach-Object {
+              Write-Host "  $($_.FullName)"
+            }
             Write-Error "config.json not found in MSI"
             exit 1
           }
           
           Write-Host "Found $($configFiles.Count) config.json file(s):"
-          $configFiles | ForEach-Object { Write-Host $_.FullName }
+          $configFiles | ForEach-Object { Write-Host "  $($_.FullName)" }
           
           # Modify each config.json found
           foreach ($configFile in $configFiles) {
             Write-Host "Modifying: $($configFile.FullName)"
             
-            # Read config
-            $config = Get-Content $configFile.FullName | ConvertFrom-Json
-            
-            # Update hub URL
-            $config.hubUrl = $hubUrl
-            
-            # Write back
-            $config | ConvertTo-Json | Set-Content $configFile.FullName
-            
-            Write-Host "Updated hubUrl to: $hubUrl"
-            Write-Host "New config content:"
-            Get-Content $configFile.FullName
+            try {
+              # Read config
+              $config = Get-Content $configFile.FullName | ConvertFrom-Json
+              
+              # Update hub URL
+              $config.hubUrl = $hubUrl
+              
+              # Write back
+              $config | ConvertTo-Json | Set-Content $configFile.FullName
+              
+              Write-Host "Updated hubUrl to: $hubUrl"
+              Write-Host "New config content:"
+              Get-Content $configFile.FullName
+            } catch {
+              Write-Error "Failed to modify config.json: $_"
+              exit 1
+            }
           }
 
       - name: Repackage MSI
