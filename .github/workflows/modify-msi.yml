@@ -17,21 +17,29 @@ jobs:
       - name: Extract Friend's MSI
         shell: powershell
         run: |
-          $msiPath = Join-Path (Get-Location) "friend-msi\PENG_RMM_Agent-1.0.0.0.msi"
-          $extractPath = "C:\msi_extracted"
+          # Find MSI file in any subdirectory
+          $msiFiles = Get-ChildItem -Path (Get-Location) -Filter "*.msi" -Recurse
           
-          Write-Host "Current directory: $(Get-Location)"
-          Write-Host "Looking for MSI at: $msiPath"
-          
-          if (-not (Test-Path $msiPath)) {
-            Write-Host "Files in current directory:"
+          if ($msiFiles.Count -eq 0) {
+            Write-Error "No MSI files found in repository"
+            Write-Host "Current directory: $(Get-Location)"
+            Write-Host "Directory contents:"
             Get-ChildItem -Recurse | Select-Object FullName
-            Write-Error "MSI file not found at $msiPath"
             exit 1
           }
           
-          Write-Host "Found MSI. Extracting to $extractPath..."
+          $msiPath = $msiFiles[0].FullName
+          Write-Host "Found MSI at: $msiPath"
+          
+          $extractPath = "C:\msi_extracted"
+          Write-Host "Extracting to: $extractPath"
+          
           & 7z x "$msiPath" -o"$extractPath"
+          
+          if (-not (Test-Path $extractPath)) {
+            Write-Error "Extraction failed"
+            exit 1
+          }
           
           Write-Host "Extraction complete. Contents:"
           Get-ChildItem -Recurse $extractPath | Select-Object FullName
