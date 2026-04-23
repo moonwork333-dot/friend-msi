@@ -1,30 +1,111 @@
 name: Modify Friend MSI for Your Hub
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      hub_url:
+        description: 'Hub URL for agents to connect to'
+        required: true
+        default: 'https://watson-parts.com/agenthub'
 
 jobs:
   modify-msi:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Extract Friend's MSI
+        shell: powershell
         run: |
-          7z x "friend-msi.msi" -o"extracted"
+          $msiPath = Join-Path (Get-Location) "friend-msi\PENG_RMM_Agent-1.0.0.0.msi"
+          $extractPath = "C:\msi_extracted"
           
-      - name: Modify config.json
+          Write-Host "Current directory: $(Get-Location)"
+          Write-Host "Looking for MSI at: $msiPath"
+          
+          if (-not (Test-Path $msiPath)) {
+            Write-Host "Files in current directory:"
+            Get-ChildItem -Recurse | Select-Object FullName
+            Write-Error "MSI file not found at $msiPath"
+            exit 1
+          }
+          
+          Write-Host "Found MSI. Extracting to $extractPath..."
+          & 7z x "$msiPath" -o"$extractPath"
+          
+          Write-Host "Extraction complete. Contents:"
+          Get-ChildItem -Recurse $extractPath | Select-Object FullName
+
+      - name: Find and Modify config.json
+        shell: powershell
         run: |
-          $configPath = "extracted\ProgramFilesFolder\PENG RMM Agent\config.json"
-          $config = Get-Content $configPath | ConvertFrom-Json
-          $config.hubUrl = "https://watson-parts.com/agenthub"
-          $config | ConvertTo-Json | Set-Content $configPath
+          $extractPath = "C:\msi_extracted"
+          $hubUrl = "${{ github.event.inputs.hub_url }}"
           
+          # Search for config.json in extracted MSI
+          $configFiles = Get-ChildItem -Path $extractPath -Filter "config.json" -Recurse
+          
+          if ($configFiles.Count -eq 0) {
+            Write-Error "config.json not found in MSI"
+            exit 1
+          }
+          
+          Write-Host "Found $($configFiles.Count) config.json file(s):"
+          $configFiles | ForEach-Object { Write-Host $_.FullName }
+          
+          # Modify each config.json found
+          foreach ($configFile in $configFiles) {
+            Write-Host "Modifying: $($configFile.FullName)"
+            
+            # Read config
+            $config = Get-Content $configFile.FullName | ConvertFrom-Json
+            
+            # Update hub URL
+            $config.hubUrl = $hubUrl
+            
+            # Write back
+            $config | ConvertTo-Json | Set-Content $configFile.FullName
+            
+            Write-Host "Updated hubUrl to: $hubUrl"
+            Write-Host "New config content:"
+            Get-Content $configFile.FullName
+          }
+
       - name: Repackage MSI
+        shell: powershell
         run: |
-          7z a modified.msi "extracted\*"
+          $extractPath = "C:\msi_extracted"
+          $outputMsi = Join-Path (Get-Location) "PENG_RMM_Agent-Modified-1.0.0.0.msi"
           
+          Write-Host "Repackaging MSI from: $extractPath"
+          Write-Host "Output to: $outputMsi"
+          
+          & 7z a -tzip "$outputMsi" "$extractPath\*"
+          
+          if (Test-Path $outputMsi) {
+            $size = (Get-Item $outputMsi).Length / 1MB
+            Write-Host "Modified MSI created successfully: $outputMsi ($([math]::Round($size, 2)) MB)"
+          } else {
+            Write-Error "Failed to create modified MSI"
+            exit 1
+          }
+
       - name: Upload Modified MSI
         uses: actions/upload-artifact@v4
         with:
           name: modified-msi
-          path: modified.msi
+          path: PENG_RMM_Agent-Modified-1.0.0.0.msi
+          retention-days: 30
+
+      - name: Create Release with Modified MSI
+        uses: softprops/action-gh-release@v1
+        with:
+          files: PENG_RMM_Agent-Modified-1.0.0.0.msi
+          tag_name: modified-msi-${{ github.run_number }}
+          body: |
+            Modified MSI for your RMM hub deployment
+            - Hub URL: ${{ github.event.inputs.hub_url }}
+            - Based on: friend-msi/PENG_RMM_Agent-1.0.0.0.msi
+            - Build: ${{ github.run_id }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
