@@ -14,83 +14,66 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract Friend's MSI
+      - name: Find MSI file
         shell: powershell
         run: |
-          # Find MSI file in any subdirectory
           $msiFiles = Get-ChildItem -Path (Get-Location) -Filter "*.msi" -Recurse
           
           if ($msiFiles.Count -eq 0) {
             Write-Error "No MSI files found in repository"
-            Write-Host "Current directory: $(Get-Location)"
-            Write-Host "Directory contents:"
-            Get-ChildItem -Recurse | Select-Object FullName
             exit 1
           }
           
           $msiPath = $msiFiles[0].FullName
-          Write-Host "Found MSI at: $msiPath"
-          
-          $extractPath = "C:\msi_extracted"
-          Write-Host "Extracting to: $extractPath"
-          
-          & 7z x "$msiPath" -o"$extractPath"
-          
-          if (-not (Test-Path $extractPath)) {
-            Write-Error "Extraction failed"
-            exit 1
-          }
-          
-          Write-Host "Extraction complete. Full directory structure:"
-          Get-ChildItem -Recurse $extractPath | ForEach-Object {
-            Write-Host "  $($_.FullName)"
-          }
-          
-          Write-Host "Searching for all JSON files:"
-          Get-ChildItem -Path $extractPath -Filter "*.json" -Recurse | ForEach-Object {
-            Write-Host "  Found: $($_.FullName)"
-          }
+          Write-Host "Found MSI: $msiPath"
+          Write-Host "msi_path=$msiPath" >> $env:GITHUB_ENV
 
-      - name: Find and Modify config.json
+      - name: Extract MSI using msiexec
+        shell: cmd
+        run: |
+          set MSI_PATH=%msi_path%
+          set EXTRACT_PATH=C:\msi_extracted
+          
+          echo Extracting MSI using msiexec...
+          msiexec /a "%MSI_PATH%" TARGETDIR="%EXTRACT_PATH%" /qb
+          
+          if not exist "%EXTRACT_PATH%" (
+            echo ERROR: Extraction failed
+            exit /b 1
+          )
+          
+          echo Extraction complete
+          echo Directory structure:
+          dir /s "%EXTRACT_PATH%"
+
+      - name: Find and modify config.json
         shell: powershell
         run: |
           $extractPath = "C:\msi_extracted"
           $hubUrl = "${{ github.event.inputs.hub_url }}"
           
-          Write-Host "Looking for config.json in: $extractPath"
+          Write-Host "Searching for config.json..."
           
-          # Search for config.json in extracted MSI
           $configFiles = Get-ChildItem -Path $extractPath -Filter "config.json" -Recurse
           
           if ($configFiles.Count -eq 0) {
-            Write-Host "ERROR: config.json not found in MSI"
-            Write-Host "Listing all files in extracted MSI:"
-            Get-ChildItem -Path $extractPath -Recurse | ForEach-Object {
-              Write-Host "  $($_.FullName)"
-            }
-            Write-Error "config.json not found in MSI"
+            Write-Host "ERROR: config.json not found"
+            Write-Host "Files in extracted MSI:"
+            Get-ChildItem -Path $extractPath -Recurse | Select-Object FullName
             exit 1
           }
           
-          Write-Host "Found $($configFiles.Count) config.json file(s):"
-          $configFiles | ForEach-Object { Write-Host "  $($_.FullName)" }
+          Write-Host "Found $($configFiles.Count) config.json file(s)"
           
-          # Modify each config.json found
           foreach ($configFile in $configFiles) {
             Write-Host "Modifying: $($configFile.FullName)"
             
             try {
-              # Read config
               $config = Get-Content $configFile.FullName | ConvertFrom-Json
-              
-              # Update hub URL
               $config.hubUrl = $hubUrl
-              
-              # Write back
               $config | ConvertTo-Json | Set-Content $configFile.FullName
               
               Write-Host "Updated hubUrl to: $hubUrl"
-              Write-Host "New config content:"
               Get-Content $configFile.FullName
             } catch {
               Write-Error "Failed to modify config.json: $_"
@@ -98,24 +81,33 @@ jobs:
             }
           }
 
-      - name: Repackage MSI
-        shell: powershell
+      - name: Repackage MSI using makecab
+        shell: cmd
         run: |
-          $extractPath = "C:\msi_extracted"
-          $outputMsi = Join-Path (Get-Location) "PENG_RMM_Agent-Modified-1.0.0.0.msi"
+          set EXTRACT_PATH=C:\msi_extracted
+          set OUTPUT_MSI=PENG_RMM_Agent-Modified-1.0.0.0.msi
           
-          Write-Host "Repackaging MSI from: $extractPath"
-          Write-Host "Output to: $outputMsi"
+          echo Creating DDF file for makecab...
           
-          & 7z a -tzip "$outputMsi" "$extractPath\*"
+          (
+            echo .Set CabinetNameTemplate=%OUTPUT_MSI%
+            echo .Set DiskDirectoryTemplate=CDROM
+            echo .Set CompressionType=MSZIP
+            echo .Set MaxDiskSize=2147483647
+            echo.
+            for /r "%EXTRACT_PATH%" %%%%F in (*) do echo %%%%F
+          ) > msi.ddf
           
-          if (Test-Path $outputMsi) {
-            $size = (Get-Item $outputMsi).Length / 1MB
-            Write-Host "Modified MSI created successfully: $outputMsi ($([math]::Round($size, 2)) MB)"
-          } else {
-            Write-Error "Failed to create modified MSI"
-            exit 1
-          }
+          echo Repackaging with makecab...
+          makecab.exe /F msi.ddf
+          
+          if exist "%OUTPUT_MSI%" (
+            echo Modified MSI created: %OUTPUT_MSI%
+            dir "%OUTPUT_MSI%"
+          ) else (
+            echo ERROR: Failed to create modified MSI
+            exit /b 1
+          )
 
       - name: Upload Modified MSI
         uses: actions/upload-artifact@v4
